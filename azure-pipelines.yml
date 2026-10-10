@@ -1,0 +1,83 @@
+
+trigger:
+- main
+
+pool:
+  vmImage: windows-2022
+
+stages:
+- stage: Deploy
+  displayName: Deploy Website to IIS VMs
+
+  jobs:
+  - deployment: DeployIIS
+    displayName: Deploy HTML to IIS Servers
+
+    environment:
+      name: IIS-HA-Env
+      resourceType: VirtualMachine
+      tags: IIS
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+
+          - task: PowerShell@2
+            displayName: Deploy HTML to IIS
+            inputs:
+              targetType: inline
+              script: |
+                $ErrorActionPreference = "Stop"
+
+                $source = "$(Build.SourcesDirectory)"
+                $htmlFile = Join-Path $source "index.html"
+
+                Import-Module WebAdministration
+
+                Write-Host "Computer: $env:COMPUTERNAME"
+
+                # Verify the HTML file exists
+                if (!(Test-Path $htmlFile)) {
+                    throw "index.html not found at $htmlFile"
+                }
+
+                # Find the IIS website
+                $site = Get-Website -Name "Default Web Site"
+
+                if (!$site) {
+                    throw "IIS website 'Default Web Site' was not found."
+                }
+
+                # Resolve the IIS physical path
+                $destination = [Environment]::ExpandEnvironmentVariables(
+                    $site.PhysicalPath
+                )
+
+                if (!(Test-Path $destination)) {
+                    New-Item -ItemType Directory `
+                      -Path $destination -Force | Out-Null
+                }
+
+                # Deploy HTML
+                Copy-Item -Path $htmlFile `
+                  -Destination (Join-Path $destination "index.html") `
+                  -Force
+
+                # Ensure IIS website is running
+                $site = Get-Website -Name "Default Web Site"
+
+                if ($site.State -ne "Started") {
+                    Start-Website -Name "Default Web Site"
+                }
+
+                # Verify deployment
+                if (!(Test-Path (Join-Path $destination "index.html"))) {
+                    throw "HTML deployment verification failed."
+                }
+
+                Write-Host "Deployment successful on $env:COMPUTERNAME"
+                Write-Host "Website path: $destination"
+                Get-Website -Name "Default Web Site" |
+                  Select-Object Name, State, PhysicalPath
